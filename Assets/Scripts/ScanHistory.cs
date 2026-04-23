@@ -1,6 +1,7 @@
 using UnityEngine;
 using UnityEngine.UI;
 using TMPro;
+using System;
 using System.Collections.Generic;
 
 public class ScanHistory : MonoBehaviour
@@ -8,6 +9,13 @@ public class ScanHistory : MonoBehaviour
     private List<FoodData> history = new List<FoodData>();
     private GameObject historyPanel;
     private RectTransform contentParent;
+
+    // Compare mode
+    private bool compareMode = false;
+    private FoodData compareItemA = null;
+    private FoodData compareItemB = null;
+    private Action<FoodData, FoodData> onCompareReady;
+    private TextMeshProUGUI compareModeLabel;
 
     private static readonly Color greenColor = new Color(0.18f, 0.76f, 0.35f);
     private static readonly Color amberColor = new Color(1f, 0.76f, 0.03f);
@@ -20,6 +28,11 @@ public class ScanHistory : MonoBehaviour
         historyPanel.SetActive(false);
     }
 
+    public void SetCompareCallback(Action<FoodData, FoodData> callback)
+    {
+        onCompareReady = callback;
+    }
+
     public void AddEntry(FoodData data)
     {
         if (data == null) return;
@@ -29,22 +42,59 @@ public class ScanHistory : MonoBehaviour
         Debug.Log($"[ScanHistory] Added: {data.productName} (total: {history.Count})");
     }
 
-    public void ShowHistory()
+    public List<FoodData> GetHistory() { return history; }
+
+    public void ShowHistory(bool asCompare = false)
     {
         if (historyPanel == null || contentParent == null) return;
+
+        compareMode = asCompare;
+        compareItemA = null;
+        compareItemB = null;
 
         // Clear
         for (int i = contentParent.childCount - 1; i >= 0; i--)
             Destroy(contentParent.GetChild(i).gameObject);
 
+        if (compareMode)
+        {
+            // Compare mode header
+            GameObject header = MakeObj("Header", contentParent);
+            TextMeshProUGUI headerText = header.AddComponent<TextMeshProUGUI>();
+            headerText.text = "Tap TWO products to compare:";
+            headerText.fontSize = 18;
+            headerText.color = new Color(0.9f, 0.7f, 0.2f);
+            headerText.alignment = TextAlignmentOptions.Center;
+            headerText.raycastTarget = false;
+            LayoutElement hle = header.AddComponent<LayoutElement>();
+            hle.preferredHeight = 35;
+            hle.minHeight = 35;
+
+            // Status label
+            GameObject statusObj = MakeObj("CompareStatus", contentParent);
+            compareModeLabel = statusObj.AddComponent<TextMeshProUGUI>();
+            compareModeLabel.text = "Selected: 0 / 2";
+            compareModeLabel.fontSize = 15;
+            compareModeLabel.color = new Color(0.6f, 0.6f, 0.6f);
+            compareModeLabel.alignment = TextAlignmentOptions.Center;
+            compareModeLabel.raycastTarget = false;
+            LayoutElement sle = statusObj.AddComponent<LayoutElement>();
+            sle.preferredHeight = 25;
+            sle.minHeight = 25;
+        }
+
         if (history.Count == 0)
         {
             AddSimpleText("No scans yet.\nTap SCAN to get started!");
         }
+        else if (compareMode && history.Count < 2)
+        {
+            AddSimpleText("Need at least 2 scanned products to compare.\nScan more items first!");
+        }
         else
         {
             for (int i = history.Count - 1; i >= 0; i--)
-                CreateEntry(history[i]);
+                CreateEntry(history[i], i);
         }
 
         Canvas.ForceUpdateCanvases();
@@ -56,12 +106,43 @@ public class ScanHistory : MonoBehaviour
     public void HideHistory()
     {
         if (historyPanel != null) historyPanel.SetActive(false);
+        compareMode = false;
     }
 
     public void ToggleHistory()
     {
         if (historyPanel == null) return;
-        if (historyPanel.activeSelf) HideHistory(); else ShowHistory();
+        if (historyPanel.activeSelf) HideHistory(); else ShowHistory(false);
+    }
+
+    public void ToggleCompare()
+    {
+        if (historyPanel == null) return;
+        if (historyPanel.activeSelf && compareMode) HideHistory();
+        else ShowHistory(true);
+    }
+
+    private void OnEntryTappedForCompare(FoodData data, Image entryBg)
+    {
+        if (!compareMode) return;
+
+        if (compareItemA == null)
+        {
+            compareItemA = data;
+            entryBg.color = new Color(0.2f, 0.4f, 0.7f, 0.95f); // blue highlight
+            if (compareModeLabel != null) compareModeLabel.text = $"Selected: {data.productName} | Tap another...";
+        }
+        else if (compareItemB == null && data.barcode != compareItemA.barcode)
+        {
+            compareItemB = data;
+            entryBg.color = new Color(0.2f, 0.4f, 0.7f, 0.95f);
+
+            // Both selected — trigger compare
+            if (compareModeLabel != null) compareModeLabel.text = "Comparing...";
+
+            HideHistory();
+            onCompareReady?.Invoke(compareItemA, compareItemB);
+        }
     }
 
     private void AddSimpleText(string text)
@@ -78,13 +159,12 @@ public class ScanHistory : MonoBehaviour
         le.minHeight = 80;
     }
 
-    private void CreateEntry(FoodData data)
+    private void CreateEntry(FoodData data, int index)
     {
         string verdict = data.GetVerdict();
 
         GameObject entry = MakeObj("Entry", contentParent);
         Image bg = entry.AddComponent<Image>();
-        bg.raycastTarget = false;
         switch (verdict)
         {
             case "Healthy":   bg.color = new Color(0.1f, 0.35f, 0.15f, 0.95f); break;
@@ -93,22 +173,33 @@ public class ScanHistory : MonoBehaviour
             default:          bg.color = new Color(0.2f, 0.2f, 0.2f, 0.95f); break;
         }
 
+        // Make tappable in compare mode
+        if (compareMode)
+        {
+            Button entryBtn = entry.AddComponent<Button>();
+            entryBtn.targetGraphic = bg;
+            Image bgRef = bg;
+            FoodData dataRef = data;
+            entryBtn.onClick.AddListener(() => OnEntryTappedForCompare(dataRef, bgRef));
+        }
+        else
+        {
+            bg.raycastTarget = false;
+        }
+
         LayoutElement le = entry.AddComponent<LayoutElement>();
         le.preferredHeight = 90;
         le.minHeight = 90;
 
         RectTransform er = entry.GetComponent<RectTransform>();
 
-        // Product name
         MakeText(er, data.productName, 17, FontStyles.Bold, Color.white,
             TextAlignmentOptions.TopLeft, 0, 0.45f, 0.65f, 1, 12, 0, 0, -6);
 
-        // Info
         MakeText(er, $"{data.calories:F0} kcal | Sugar: {data.sugars:F1}g | Fat: {data.fat:F1}g",
             12, FontStyles.Normal, new Color(0.8f, 0.8f, 0.8f),
             TextAlignmentOptions.BottomLeft, 0, 0, 0.65f, 0.45f, 12, 6, 0, 0);
 
-        // Badge
         GameObject badge = MakeObj("Badge", er);
         Image badgeImg = badge.AddComponent<Image>();
         badgeImg.raycastTarget = false;

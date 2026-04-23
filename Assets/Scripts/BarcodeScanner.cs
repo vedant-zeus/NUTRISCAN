@@ -63,7 +63,6 @@ public class BarcodeScanner : MonoBehaviour
             yield break;
         }
 
-        // Prefer back-facing camera
         string cameraName = devices[0].name;
         for (int i = 0; i < devices.Length; i++)
         {
@@ -77,7 +76,6 @@ public class BarcodeScanner : MonoBehaviour
         webCamTexture = new WebCamTexture(cameraName, cameraWidth, cameraHeight);
         webCamTexture.Play();
 
-        // Wait for camera to actually start
         float timer = 0f;
         while (!webCamTexture.isPlaying && timer < 5f)
         {
@@ -91,59 +89,43 @@ public class BarcodeScanner : MonoBehaviour
             yield break;
         }
 
-        // Wait for camera to stabilize (important on Android)
         yield return new WaitForSeconds(0.5f);
 
         if (cameraPreview != null)
         {
             cameraPreview.texture = webCamTexture;
-
-            // Fix rotation for mobile
             int angle = webCamTexture.videoRotationAngle;
             cameraPreview.rectTransform.localEulerAngles = new Vector3(0, 0, -angle);
-
             if (webCamTexture.videoVerticallyMirrored)
                 cameraPreview.uvRect = new Rect(0, 1, 1, -1);
         }
 
         SetStatus("Ready — tap SCAN!");
-        Debug.Log($"[BarcodeScanner] Camera: {webCamTexture.deviceName} {webCamTexture.width}x{webCamTexture.height} rot:{webCamTexture.videoRotationAngle}");
+        Debug.Log($"[BarcodeScanner] Camera: {webCamTexture.deviceName} {webCamTexture.width}x{webCamTexture.height}");
     }
 
-    /// <summary>
-    /// Called every frame. Only processes when actively scanning
-    /// and only when the camera has a genuinely new frame.
-    /// This guarantees fresh pixel data on Android.
-    /// </summary>
     private void Update()
     {
-        // Only process if we're actively scanning
         if (scanFramesRemaining <= 0) return;
         if (webCamTexture == null || !webCamTexture.isPlaying) return;
-
-        // CRITICAL: only read when camera has a NEW frame
         if (!webCamTexture.didUpdateThisFrame) return;
 
         scanFramesRemaining--;
 
-        // Get fresh pixels directly (new array each time)
         Color32[] pixels = webCamTexture.GetPixels32();
         if (pixels == null || pixels.Length == 0) return;
 
-        // Try to decode
         var source = new Color32LuminanceSource(pixels, webCamTexture.width, webCamTexture.height);
         var result = barcodeReader.Decode(source);
 
         if (result != null && !string.IsNullOrEmpty(result.Text))
         {
-            // Found a barcode! Stop scanning immediately
             scanFramesRemaining = 0;
             Debug.Log($"[BarcodeScanner] Decoded: {result.Text}");
             StartCoroutine(ProcessBarcode(result.Text));
             return;
         }
 
-        // If we've used all our attempts
         if (scanFramesRemaining <= 0)
         {
             SetStatus("No barcode found. Try again!");
@@ -160,8 +142,6 @@ public class BarcodeScanner : MonoBehaviour
         isScanning = true;
         SetStatus("Scanning...");
         if (scanButton != null) scanButton.interactable = false;
-
-        // Try for 30 fresh camera frames (~1-2 seconds depending on FPS)
         scanFramesRemaining = 30;
     }
 
